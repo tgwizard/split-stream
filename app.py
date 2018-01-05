@@ -4,6 +4,7 @@ import subprocess
 import queue
 
 import time
+from io import BytesIO
 from threading import Thread
 
 import werkzeug.formparser
@@ -117,16 +118,25 @@ class SubprocessStreamFile:
 
 
 class SplitStreamWriter:
-    def __init__(self, output_streams):
+    def __init__(self, output_streams, buffer_size=10 * 1024 * 1024):
         super().__init__()
 
         self.output_streams = output_streams
         self.total_size = 0
         self.write_counts = 0
 
-    def write(self, b):
+        self.buffer_size = buffer_size
+        self.buffer = BytesIO()
+
+    def _flush_buffer(self):
         for stream in self.output_streams:
-            stream.write(b)
+            stream.write(self.buffer.getbuffer())
+        self.buffer = BytesIO()
+
+    def write(self, b):
+        self.buffer.write(b)
+        if self.buffer.tell() > self.buffer_size:
+            self._flush_buffer()
 
         size = len(b)
         self.total_size += size
@@ -142,6 +152,8 @@ class SplitStreamWriter:
         return size
 
     def seek(self, *args, **kwargs):
+        self._flush_buffer()
+
         for stream in self.output_streams:
             stream.seek(*args, **kwargs)
         return 0
