@@ -1,6 +1,7 @@
 import subprocess
 from threading import Thread
 from time import time
+from typing import Union
 from queue import Queue
 
 
@@ -91,8 +92,10 @@ class SubprocessInputStreamer:
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.stop()
 
-    def write(self, b):
+    def write(self, b: Union[bytes, memoryview]):
         assert self.running, 'Must start before writing'
+        if isinstance(b, memoryview):
+            b = bytes(b)
         self._queue.put(b)
 
     def _thread_write(self):
