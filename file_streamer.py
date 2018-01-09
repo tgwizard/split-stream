@@ -20,6 +20,7 @@ def stream_factory(total_content_length, content_type, filename, content_length=
             total_content_length, content_type, filename, content_length
         )
     )
+    # Here we can return anything with a writes(b: bytes) and seek() method, like a file.
     return DummyWerkzeugFile()
 
 
