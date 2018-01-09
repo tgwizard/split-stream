@@ -1,6 +1,7 @@
 import subprocess
 import time
 
+from werkzeug.wsgi import get_content_length
 from flask import Flask, Response, request
 
 from subprocess_input_streamer import SubprocessInputStreamer
@@ -50,7 +51,8 @@ def main():
         )
         writer = SplitStreamWriter(temp_files + [SubprocessStreamProxy(spx)])
 
-        print('Starting to read request')
+        content_length = get_content_length(request.environ)
+        print('Starting to read request: content_length=%s' % content_length)
         start = time.time()
 
         stream = request.stream
