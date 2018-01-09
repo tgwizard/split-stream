@@ -1,14 +1,14 @@
 import resource
 
 import subprocess
-import queue
 
 import time
 from io import BytesIO
-from threading import Thread
 
 import werkzeug.formparser
 from flask import Flask, Response, request
+
+from subprocess_input_streamer import SubprocessInputStreamer
 
 
 def mb(x):
@@ -19,102 +19,19 @@ def get_memory_usage():
     return mb(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)
 
 
-class SubprocessStreamFile:
-    _end_of_stream = object()
+class WerkzeugSubprocessStreamProxy:
+    def __init__(self, input_streamer: SubprocessInputStreamer):
+        self.input_streamer = input_streamer
 
-    def __init__(self, process_args):
-        self.process_args = process_args
-        self._running = False
+    def write(self, b: bytes):
+        if not self.input_streamer.running:
+            self.input_streamer.start()
 
-    def _start(self):
-        assert not self._running
-
-        self.stdout = None
-        self.stderr = None
-        self.error = None
-
-        self._process = subprocess.Popen(
-            self.process_args, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE
-        )
-
-        self._queue = queue.Queue()
-        self._running = True
-
-        self._stdin_thread = Thread(target=self._thread_write)
-        self._stdin_thread.daemon = True
-        self._stdin_thread.start()
-
-        self._stdout_buffer = []
-        self._stdout_thread = Thread(
-            target=self._thread_read, args=(self._process.stdout, self._stdout_buffer)
-        )
-        self._stdout_thread.daemon = True
-        self._stdout_thread.start()
-
-        self._stderr_buffer = []
-        self._stderr_thread = Thread(
-            target=self._thread_read, args=(self._process.stderr, self._stderr_buffer)
-        )
-        self._stderr_thread.daemon = True
-        self._stderr_thread.start()
-
-    def _stop(self):
-        if not self._running:
-            return
-
-        self._queue.put(self._end_of_stream)
-        self._queue.join()
-        self._process.stdin.flush()
-        self._process.stdin.close()
-
-        self._running = False
-
-        try:
-            self._stdin_thread.join(timeout=10)
-            self._stdout_thread.join(timeout=2)
-            self._stderr_thread.join(timeout=2)
-        except subprocess.TimeoutExpired as e:
-            print(e)
-            self.error = e
-            self._process.kill()
-        finally:
-            self._process = None
-            self._queue = None
-
-        if self._stdout_buffer:
-            self.stdout = self._stdout_buffer[0]
-        if self._stderr_buffer:
-            self.stderr = self._stderr_buffer[0]
-
-        self._stdout_buffer = None
-        self._stderr_buffer = None
-
-        assert not self._stdin_thread.is_alive(), 'Stdin thread is alive!'
-        assert not self._stdout_thread.is_alive(), 'Stdout thread is alive!'
-        assert not self._stderr_thread.is_alive(), 'Stderr thread is alive!'
-
-    def write(self, b):
-        if not self._running:
-            self._start()
-
-        self._queue.put(b)
-
-    def _thread_write(self):
-        while self._running:
-            b = self._queue.get()
-            if b is self._end_of_stream:
-                self._queue.task_done()
-                return
-            self._process.stdin.write(b)
-            self._queue.task_done()
-
-    def _thread_read(self, fp, buffer):
-        buffer.append(fp.read())
-        fp.close()
+        self.input_streamer.write(b)
 
     def seek(self, *args, **kwargs):
-        # Hack...
-        self._stop()
+        # Hack: this is how we know we've finished reading the request file.
+        self.input_streamer.stop()
 
 
 class SplitStreamWriter:
@@ -189,6 +106,33 @@ def main():
         x = list({} for _ in range(20000000))
         return Response(status=200)
 
+    @app.route('/foo', methods=['POST'])
+    def foo():
+        class DummyWerkzeugFile:
+            def write(self, b: bytes):
+                print('reading file parts: size=%s' % len(b))
+
+            def seek(self, *args, **kwargs):
+                # Hack: this is how we know we've finished reading the request file.
+                return 0
+
+        def stream_factory(total_content_length, content_type, filename, content_length=None):
+            return DummyWerkzeugFile()
+
+        print('Starting to read request')
+        start = time.time()
+
+        stream, form, files = werkzeug.formparser.parse_form_data(
+            request.environ, stream_factory=stream_factory
+        )
+
+        end = time.time()
+        print('Finished reading request: time=%s' % (end - start))
+        print('Form: %s' % form)
+        print('Files: %s' % files)
+
+        return Response(status=200)
+
     @app.route('/upload', methods=['POST'])
     def upload():
         temp_files = [
@@ -196,8 +140,10 @@ def main():
             # open('/Users/adam/Desktop/stream-split-b', mode='wb'),
             # open('/Users/adam/Desktop/stream-split-c', mode='wb'),
         ]
-        spx = SubprocessStreamFile(['exiftool', '-'])
-        factory = SplitStreamWriterFactory(temp_files + [spx])
+        spx = SubprocessInputStreamer(
+            ['exiftool', '-'], popen_kwargs={'stdin': subprocess.PIPE, 'stdout': subprocess.PIPE}
+        )
+        factory = SplitStreamWriterFactory(temp_files + [WerkzeugSubprocessStreamProxy(spx)])
         print('Starting to read request')
 
         start = time.time()
@@ -208,6 +154,8 @@ def main():
         except Exception as e:
             print(e)
             return None
+        else:
+            print('no exception')
 
         end = time.time()
         print('Finished reading request: time=%s' % (end - start))
@@ -220,7 +168,8 @@ def main():
             print('SPX ERROR: error=%s, spx.stderr=%s' % (spx.error, spx.stderr))
         else:
             print('SPX: ')
-            print(spx.stdout.decode() if spx.stdout else '<NOTHING>')
+            print(spx.stdout.decode() if spx.stdout else '<NO STDOUT>')
+            print(spx.stderr.decode() if spx.stderr else '<NO STDERR>')
 
         return Response(status=200)
 
