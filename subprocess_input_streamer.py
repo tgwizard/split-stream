@@ -74,9 +74,10 @@ class SubprocessInputStreamer:
                     raise subprocess.TimeoutExpired(self._process.args, self.timeout)
 
             self.exit_code = self._process.wait(timeout=self._remaining_time(end_time))
-        except subprocess.TimeoutExpired as e:
+        except Exception as e:
             self.error = e
             self._process.kill()
+            self._process.wait()
         finally:
             self._process = None
             self._queue = None
