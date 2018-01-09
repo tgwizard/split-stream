@@ -1,10 +1,9 @@
 import time
-from itertools import tee
 
-from werkzeug.formparser import FormDataParser, MultiPartParser
-from flask import Flask, Response, request
+from werkzeug.formparser import MultiPartParser
 from werkzeug.http import parse_options_header
 from werkzeug.wsgi import get_content_length, get_input_stream
+from flask import Flask, Response, request
 
 
 class DummyWerkzeugFile:
