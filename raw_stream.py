@@ -23,7 +23,6 @@ class SubprocessStreamProxy:
 
 class SplitStreamWriter:
     def __init__(self, output_streams):
-        super().__init__()
         self.output_streams = output_streams
 
     def write(self, b):
