@@ -105,8 +105,18 @@ class SubprocessInputStreamer:
             if b is self._end_of_stream:
                 self._queue.task_done()
                 return
-            self._process.stdin.write(b)
-            self._queue.task_done()
+
+            try:
+                self._process.stdin.write(b)
+            except BrokenPipeError:
+                # Failed to write to subprocess stdin (broken pipe, stdin likely closed.
+                pass
+            except Exception:
+                # Failed to write to subprocess stdin. Handle appropriately (but make
+                # sure to consume the queue).
+                pass
+            finally:
+                self._queue.task_done()
 
     def _thread_read(self, fp, out_name):
         setattr(self, out_name, fp.read())
